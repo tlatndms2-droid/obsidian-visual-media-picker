@@ -451,7 +451,7 @@ var MediaInserter = class {
       new import_obsidian2.Notice("Visual Media Picker: this Obsidian version does not expose Canvas node creation.");
       return;
     }
-    const center = context.point ?? canvas.posCenter ?? { x: 0, y: 0 };
+    const center = context.point ?? this.getCanvasCenter(canvas);
     const rowCount = Math.ceil(files.length / COLUMNS);
     const startX = center.x - (Math.min(files.length, COLUMNS) * (CARD_WIDTH + GAP) - GAP) / 2;
     const startY = center.y - (rowCount * (CARD_HEIGHT + GAP) - GAP) / 2;
@@ -470,6 +470,14 @@ var MediaInserter = class {
       if (!this.containsNode(canvas.nodes, node)) canvas.addNode?.(node);
     }
     canvas.requestSave?.();
+  }
+  getCanvasCenter(canvas) {
+    try {
+      const center = typeof canvas.posCenter === "function" ? canvas.posCenter.call(canvas) : canvas.posCenter;
+      if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) return center;
+    } catch {
+    }
+    return { x: 0, y: 0 };
   }
   containsNode(nodes, node) {
     if (!nodes) return false;
