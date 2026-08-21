@@ -53,6 +53,10 @@
   min-width: 92px;
 }
 
+.vmp-direction-select {
+  min-width: 116px;
+}
+
 .vmp-scope-bar {
   min-height: 34px;
   padding-bottom: 10px;
