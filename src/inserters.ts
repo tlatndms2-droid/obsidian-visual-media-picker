@@ -19,7 +19,7 @@ interface InternalCanvas {
   nodes?: Map<string, InternalCanvasNode> | InternalCanvasNode[];
   requestSave?: () => void;
   zoomToSelection?: () => void;
-  posCenter?: CanvasPoint;
+  posCenter?: (() => CanvasPoint) | CanvasPoint;
   posFromEvt?: (event: MouseEvent) => CanvasPoint;
 }
 
@@ -65,7 +65,7 @@ export class MediaInserter {
       return;
     }
 
-    const center = context.point ?? canvas.posCenter ?? { x: 0, y: 0 };
+    const center = context.point ?? this.getCanvasCenter(canvas);
     const rowCount = Math.ceil(files.length / COLUMNS);
     const startX = center.x - (Math.min(files.length, COLUMNS) * (CARD_WIDTH + GAP) - GAP) / 2;
     const startY = center.y - (rowCount * (CARD_HEIGHT + GAP) - GAP) / 2;
@@ -85,6 +85,18 @@ export class MediaInserter {
       if (!this.containsNode(canvas.nodes, node)) canvas.addNode?.(node);
     }
     canvas.requestSave?.();
+  }
+
+  private getCanvasCenter(canvas: InternalCanvas): CanvasPoint {
+    try {
+      const center = typeof canvas.posCenter === "function"
+        ? canvas.posCenter.call(canvas)
+        : canvas.posCenter;
+      if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) return center;
+    } catch {
+      // Fall through to a safe origin when the private Canvas API changes.
+    }
+    return { x: 0, y: 0 };
   }
 
   private containsNode(nodes: InternalCanvas["nodes"], node: InternalCanvasNode): boolean {
