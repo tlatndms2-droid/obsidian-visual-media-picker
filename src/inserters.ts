@@ -4,6 +4,8 @@ import type { CanvasPoint, PickerContext } from "./types";
 interface InternalCanvasNode {
   id?: string;
   nodeEl?: HTMLElement;
+  getData?: () => { type?: string; text?: string };
+  setText?: (text: string) => void;
 }
 
 interface InternalCanvas {
@@ -17,7 +19,9 @@ interface InternalCanvas {
   }) => InternalCanvasNode;
   addNode?: (node: InternalCanvasNode) => void;
   nodes?: Map<string, InternalCanvasNode> | InternalCanvasNode[];
+  selection?: Set<InternalCanvasNode>;
   requestSave?: () => void;
+  markDirty?: (node: InternalCanvasNode) => void;
   zoomToSelection?: () => void;
   posCenter?: (() => CanvasPoint) | CanvasPoint;
   posFromEvt?: (event: MouseEvent) => CanvasPoint;
@@ -65,6 +69,8 @@ export class MediaInserter {
       return;
     }
 
+    if (this.insertIntoSelectedTextNode(files, context, canvas)) return;
+
     const center = context.point ?? this.getCanvasCenter(canvas);
     const rowCount = Math.ceil(files.length / COLUMNS);
     const startX = center.x - (Math.min(files.length, COLUMNS) * (CARD_WIDTH + GAP) - GAP) / 2;
@@ -85,6 +91,28 @@ export class MediaInserter {
       if (!this.containsNode(canvas.nodes, node)) canvas.addNode?.(node);
     }
     canvas.requestSave?.();
+  }
+
+  private insertIntoSelectedTextNode(
+    files: TFile[],
+    context: PickerContext & { kind: "canvas" },
+    canvas: InternalCanvas
+  ): boolean {
+    if (canvas.selection?.size !== 1) return false;
+    const node = Array.from(canvas.selection)[0];
+    const data = node.getData?.();
+    if (data?.type !== "text" || typeof node.setText !== "function") return false;
+
+    const embeds = files.map((file) => {
+      const link = this.app.metadataCache.fileToLinktext(file, context.sourcePath, true);
+      return `![[${link}]]`;
+    }).join("\n");
+    const currentText = typeof data.text === "string" ? data.text : "";
+    const separator = currentText.length > 0 && !currentText.endsWith("\n") ? "\n" : "";
+    node.setText(`${currentText}${separator}${embeds}`);
+    canvas.markDirty?.(node);
+    canvas.requestSave?.();
+    return true;
   }
 
   private getCanvasCenter(canvas: InternalCanvas): CanvasPoint {

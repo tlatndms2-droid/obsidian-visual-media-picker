@@ -451,6 +451,7 @@ var MediaInserter = class {
       new import_obsidian2.Notice("Visual Media Picker: this Obsidian version does not expose Canvas node creation.");
       return;
     }
+    if (this.insertIntoSelectedTextNode(files, context, canvas)) return;
     const center = context.point ?? this.getCanvasCenter(canvas);
     const rowCount = Math.ceil(files.length / COLUMNS);
     const startX = center.x - (Math.min(files.length, COLUMNS) * (CARD_WIDTH + GAP) - GAP) / 2;
@@ -470,6 +471,22 @@ var MediaInserter = class {
       if (!this.containsNode(canvas.nodes, node)) canvas.addNode?.(node);
     }
     canvas.requestSave?.();
+  }
+  insertIntoSelectedTextNode(files, context, canvas) {
+    if (canvas.selection?.size !== 1) return false;
+    const node = Array.from(canvas.selection)[0];
+    const data = node.getData?.();
+    if (data?.type !== "text" || typeof node.setText !== "function") return false;
+    const embeds = files.map((file) => {
+      const link = this.app.metadataCache.fileToLinktext(file, context.sourcePath, true);
+      return `![[${link}]]`;
+    }).join("\n");
+    const currentText = typeof data.text === "string" ? data.text : "";
+    const separator = currentText.length > 0 && !currentText.endsWith("\n") ? "\n" : "";
+    node.setText(`${currentText}${separator}${embeds}`);
+    canvas.markDirty?.(node);
+    canvas.requestSave?.();
+    return true;
   }
   getCanvasCenter(canvas) {
     try {
