@@ -1,5 +1,5 @@
 import { App, Modal, Notice, TFile, debounce, setIcon } from "obsidian";
-import type { MediaFilter, MediaItem, MediaSort, PickerContext, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
+import type { MediaFilter, MediaGroup, MediaItem, MediaSort, PickerContext, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
 import type { MediaIndex } from "./media-index";
 import type { ThumbnailCache } from "./thumbnail-cache";
 
@@ -10,11 +10,26 @@ interface PickerDependencies {
   settings: VisualMediaPickerSettings;
   context: PickerContext;
   onInsert: (files: TFile[]) => void;
+  onGroupChange: (group: MediaGroup) => Promise<void>;
   onSortChange: (sort: MediaSort, direction: SortDirection) => Promise<void>;
   onThumbnailSizeChange: (size: ThumbnailSize) => Promise<void>;
 }
 
 const OVERSCAN_ROWS = 2;
+const GROUP_HEADER_HEIGHT = 42;
+
+interface MediaGroupSection {
+  label: string;
+  order: number | string;
+  items: MediaItem[];
+}
+
+interface LayoutGroup extends MediaGroupSection {
+  top: number;
+  contentTop: number;
+  bottom: number;
+  startIndex: number;
+}
 
 export class MediaPickerModal extends Modal {
   private readonly index: MediaIndex;
@@ -22,10 +37,12 @@ export class MediaPickerModal extends Modal {
   private readonly settings: VisualMediaPickerSettings;
   private readonly context: PickerContext;
   private readonly onInsert: (files: TFile[]) => void;
+  private readonly onGroupChange: (group: MediaGroup) => Promise<void>;
   private readonly onSortChange: (sort: MediaSort, direction: SortDirection) => Promise<void>;
   private readonly onThumbnailSizeChange: (size: ThumbnailSize) => Promise<void>;
   private query = "";
   private filter: MediaFilter = "all";
+  private group: MediaGroup;
   private sort: MediaSort;
   private sortDirection: SortDirection;
   private folder = "";
@@ -47,10 +64,12 @@ export class MediaPickerModal extends Modal {
     this.settings = dependencies.settings;
     this.context = dependencies.context;
     this.onInsert = dependencies.onInsert;
+    this.onGroupChange = dependencies.onGroupChange;
     this.onSortChange = dependencies.onSortChange;
     this.onThumbnailSizeChange = dependencies.onThumbnailSizeChange;
     this.sort = dependencies.settings.defaultSort;
     this.sortDirection = dependencies.settings.defaultSortDirection;
+    this.group = dependencies.settings.defaultGroup;
     this.includeSubfolders = dependencies.settings.includeSubfolders;
     if (dependencies.settings.defaultScope === "current-folder") {
       this.folder = this.getContextFolder();
@@ -120,6 +139,15 @@ export class MediaPickerModal extends Modal {
       void this.onSortChange(this.sort, this.sortDirection);
     });
 
+    const group = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-group-select", attr: { "aria-label": "Group by" } });
+    this.addOptions(group, { none: "Group: None", name: "Group: Name", modified: "Group: Date modified", type: "Group: Type", size: "Group: Size", created: "Group: Date created" });
+    group.value = this.group;
+    group.addEventListener("change", () => {
+      this.group = group.value as MediaGroup;
+      this.applyFilters();
+      void this.onGroupChange(this.group);
+    });
+
     const size = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-size-select", attr: { "aria-label": "Thumbnail size" } });
     this.addOptions(size, { small: "Small", medium: "Medium", large: "Large" });
     size.value = this.settings.thumbnailSize;
@@ -168,17 +196,19 @@ export class MediaPickerModal extends Modal {
 
   private applyFilters(): void {
     const folderPrefix = this.folder ? `${this.folder}/` : "";
-    this.visibleItems = this.index.getItems().filter((item) => {
+    const filteredItems = this.index.getItems().filter((item) => {
       if (this.filter !== "all" && item.kind !== this.filter) return false;
       if (this.query && !item.path.toLocaleLowerCase().includes(this.query)) return false;
       if (!this.folder) return true;
       return this.includeSubfolders ? item.path.startsWith(folderPrefix) : item.parentPath === this.folder;
     }).slice();
 
-    this.visibleItems.sort((left, right) => this.compareItems(left, right));
+    filteredItems.sort((left, right) => this.compareItems(left, right));
+    const groups = this.buildGroups(filteredItems);
+    this.visibleItems = groups.flatMap((group) => group.items);
 
     this.resultLabel?.setText(`${this.visibleItems.length.toLocaleString()} items`);
-    this.grid?.setItems(this.visibleItems);
+    this.grid?.setGroups(groups);
   }
 
   private compareItems(left: MediaItem, right: MediaItem): number {
@@ -191,6 +221,79 @@ export class MediaPickerModal extends Modal {
     else result = compareText(left.name, right.name);
     if (result === 0) result = compareText(left.path, right.path);
     return this.sortDirection === "ascending" ? result : -result;
+  }
+
+  private buildGroups(items: MediaItem[]): MediaGroupSection[] {
+    if (this.group === "none") return [{ label: "", order: 0, items }];
+    const buckets = new Map<string, MediaGroupSection>();
+    for (const item of items) {
+      const descriptor = this.getGroupDescriptor(item);
+      const existing = buckets.get(descriptor.key);
+      if (existing) existing.items.push(item);
+      else buckets.set(descriptor.key, { label: descriptor.label, order: descriptor.order, items: [item] });
+    }
+    const groups = Array.from(buckets.values());
+    groups.sort((left, right) => {
+      const result = typeof left.order === "number" && typeof right.order === "number"
+        ? left.order - right.order
+        : String(left.order).localeCompare(String(right.order), undefined, { numeric: true, sensitivity: "base" });
+      return this.sortDirection === "ascending" ? result : -result;
+    });
+    for (const group of groups) group.items.sort((left, right) => this.compareItems(left, right));
+    return groups;
+  }
+
+  private getGroupDescriptor(item: MediaItem): { key: string; label: string; order: number | string } {
+    if (this.group === "modified") return this.getDateGroup(item.mtime);
+    if (this.group === "created") return this.getDateGroup(item.ctime);
+    if (this.group === "type") {
+      const extension = item.extension.toUpperCase();
+      return { key: `type-${extension}`, label: extension, order: extension };
+    }
+    if (this.group === "size") return this.getSizeGroup(item.size);
+    const label = this.getNameGroup(item.name);
+    return { key: `name-${label}`, label, order: label };
+  }
+
+  private getDateGroup(timestamp: number): { key: string; label: string; order: number } {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const itemDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const korean = navigator.language.toLowerCase().startsWith("ko");
+    if (itemDay === today) return { key: "date-today", label: korean ? "오늘" : "Today", order: today };
+    if (itemDay < today && itemDay >= today - 6 * 86_400_000) {
+      return { key: "date-last-seven-days", label: korean ? "지난 7일" : "Last 7 days", order: today - 86_400_000 };
+    }
+    const monthStart = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+    const formatter = new Intl.DateTimeFormat(undefined, date.getFullYear() === now.getFullYear()
+      ? { month: "long" }
+      : { year: "numeric", month: "long" });
+    return { key: `date-${date.getFullYear()}-${date.getMonth()}`, label: formatter.format(date), order: monthStart };
+  }
+
+  private getSizeGroup(size: number): { key: string; label: string; order: number } {
+    const korean = navigator.language.toLowerCase().startsWith("ko");
+    const megabyte = 1024 * 1024;
+    const gigabyte = 1024 * megabyte;
+    if (size < megabyte) return { key: "size-0", label: korean ? "1MB 미만" : "Under 1 MB", order: 0 };
+    if (size < 10 * megabyte) return { key: "size-1", label: "1–10 MB", order: 1 };
+    if (size < 100 * megabyte) return { key: "size-2", label: "10–100 MB", order: 2 };
+    if (size < gigabyte) return { key: "size-3", label: "100 MB–1 GB", order: 3 };
+    return { key: "size-4", label: korean ? "1GB 이상" : "1 GB and larger", order: 4 };
+  }
+
+  private getNameGroup(name: string): string {
+    const first = name.trim().charAt(0);
+    if (!first) return "#";
+    if (/\d/.test(first)) return "0–9";
+    if (/[a-z]/i.test(first)) return first.toLocaleUpperCase();
+    const code = first.charCodeAt(0);
+    if (code >= 0xac00 && code <= 0xd7a3) {
+      const initials = ["ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"];
+      return initials[Math.floor((code - 0xac00) / 588)];
+    }
+    return first.toLocaleUpperCase();
   }
 
   private createCard(item: MediaItem, index: number): HTMLElement {
@@ -343,7 +446,8 @@ export class MediaPickerModal extends Modal {
 }
 
 class VirtualMediaGrid {
-  private items: MediaItem[] = [];
+  private groups: MediaGroupSection[] = [];
+  private layoutGroups: LayoutGroup[] = [];
   private columns = 1;
   private cardWidth = 210;
   private rowHeight = 220;
@@ -362,8 +466,8 @@ class VirtualMediaGrid {
     this.setSize(size);
   }
 
-  setItems(items: MediaItem[]): void {
-    this.items = items;
+  setGroups(groups: MediaGroupSection[]): void {
+    this.groups = groups;
     this.scrollEl.scrollTop = 0;
     this.measure();
   }
@@ -388,25 +492,52 @@ class VirtualMediaGrid {
   private measure(): void {
     const width = this.scrollEl.clientWidth;
     this.columns = Math.max(1, Math.floor((width + 12) / (this.cardWidth + 12)));
-    const rows = Math.ceil(this.items.length / this.columns);
-    this.stageEl.style.height = `${rows * this.rowHeight}px`;
+    let top = 0;
+    let startIndex = 0;
+    this.layoutGroups = this.groups.map((group) => {
+      const headerHeight = group.label ? GROUP_HEADER_HEIGHT : 0;
+      const contentTop = top + headerHeight;
+      const rows = Math.ceil(group.items.length / this.columns);
+      const bottom = contentTop + rows * this.rowHeight;
+      const layout = { ...group, top, contentTop, bottom, startIndex };
+      top = bottom;
+      startIndex += group.items.length;
+      return layout;
+    });
+    this.stageEl.style.height = `${top}px`;
     this.renderWindow();
   }
 
   private renderWindow(): void {
-    const firstRow = Math.max(0, Math.floor(this.scrollEl.scrollTop / this.rowHeight) - OVERSCAN_ROWS);
-    const lastRow = Math.min(Math.ceil(this.items.length / this.columns), Math.ceil((this.scrollEl.scrollTop + this.scrollEl.clientHeight) / this.rowHeight) + OVERSCAN_ROWS);
-    const start = firstRow * this.columns;
-    const end = Math.min(this.items.length, lastRow * this.columns);
+    const viewportTop = this.scrollEl.scrollTop;
+    const viewportBottom = viewportTop + this.scrollEl.clientHeight;
+    const overscan = OVERSCAN_ROWS * this.rowHeight;
     this.stageEl.empty();
-    for (let index = start; index < end; index += 1) {
-      const card = this.createCard(this.items[index], index);
-      const row = Math.floor(index / this.columns);
-      const column = index % this.columns;
-      card.style.width = `${this.cardWidth}px`;
-      card.style.height = `${this.rowHeight - 12}px`;
-      card.style.transform = `translate(${column * (this.cardWidth + 12)}px, ${row * this.rowHeight}px)`;
-      this.stageEl.appendChild(card);
+    for (const group of this.layoutGroups) {
+      if (group.bottom < viewportTop - overscan || group.top > viewportBottom + overscan) continue;
+      if (group.label) {
+        const header = this.stageEl.createDiv({ cls: "vmp-group-header" });
+        header.createSpan({ cls: "vmp-group-title", text: group.label });
+        header.createSpan({ cls: "vmp-group-count", text: group.items.length.toLocaleString() });
+        header.createDiv({ cls: "vmp-group-line" });
+        const stickyTop = Math.min(Math.max(group.top, viewportTop), Math.max(group.top, group.bottom - GROUP_HEADER_HEIGHT));
+        header.style.transform = `translateY(${stickyTop}px)`;
+      }
+
+      const rowCount = Math.ceil(group.items.length / this.columns);
+      const firstRow = Math.max(0, Math.floor((viewportTop - group.contentTop) / this.rowHeight) - OVERSCAN_ROWS);
+      const lastRow = Math.min(rowCount, Math.ceil((viewportBottom - group.contentTop) / this.rowHeight) + OVERSCAN_ROWS);
+      const start = firstRow * this.columns;
+      const end = Math.min(group.items.length, lastRow * this.columns);
+      for (let localIndex = start; localIndex < end; localIndex += 1) {
+        const card = this.createCard(group.items[localIndex], group.startIndex + localIndex);
+        const row = Math.floor(localIndex / this.columns);
+        const column = localIndex % this.columns;
+        card.style.width = `${this.cardWidth}px`;
+        card.style.height = `${this.rowHeight - 12}px`;
+        card.style.transform = `translate(${column * (this.cardWidth + 12)}px, ${group.contentTop + row * this.rowHeight}px)`;
+        this.stageEl.appendChild(card);
+      }
     }
   }
 }

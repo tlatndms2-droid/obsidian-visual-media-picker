@@ -1,7 +1,7 @@
 {
   "id": "visual-media-picker",
   "name": "Visual Media Picker",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minAppVersion": "1.8.0",
   "description": "Browse images, GIFs, and videos visually, then insert them into Markdown or Canvas.",
   "author": "Visual Media Picker contributors",
