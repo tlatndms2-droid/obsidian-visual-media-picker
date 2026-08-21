@@ -1,11 +1,12 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type VisualMediaPickerPlugin from "./main";
-import type { DefaultScope, MediaSort, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
+import type { DefaultScope, MediaGroup, MediaSort, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
 
 export const DEFAULT_SETTINGS: VisualMediaPickerSettings = {
   thumbnailSize: "medium",
   defaultSort: "modified",
   defaultSortDirection: "descending",
+  defaultGroup: "modified",
   videoHoverPreview: true,
   gifHoverPreview: true,
   defaultScope: "vault",
@@ -37,6 +38,11 @@ export class VisualMediaPickerSettingTab extends PluginSettingTab {
       .addOptions({ ascending: "Ascending", descending: "Descending" })
       .setValue(this.plugin.settings.defaultSortDirection)
       .onChange(async (value) => this.updateSettings({ defaultSortDirection: value as SortDirection })));
+
+    new Setting(containerEl).setName("Default group by").addDropdown((dropdown) => dropdown
+      .addOptions({ none: "None", name: "Name", modified: "Date modified", type: "Type", size: "Size", created: "Date created" })
+      .setValue(this.plugin.settings.defaultGroup)
+      .onChange(async (value) => this.updateSettings({ defaultGroup: value as MediaGroup })));
 
     new Setting(containerEl).setName("Video hover preview").addToggle((toggle) => toggle
       .setValue(this.plugin.settings.videoHoverPreview)
