@@ -4,7 +4,7 @@ import { MediaPickerModal } from "./media-picker-modal";
 import { MediaInserter } from "./inserters";
 import { DEFAULT_SETTINGS, VisualMediaPickerSettingTab } from "./settings";
 import { ThumbnailCache } from "./thumbnail-cache";
-import type { CanvasPoint, PickerContext, ThumbnailSize, VisualMediaPickerSettings } from "./types";
+import type { CanvasPoint, MediaSort, PickerContext, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
 
 interface CanvasViewLike {
   getViewType(): string;
@@ -137,6 +137,11 @@ export default class VisualMediaPickerPlugin extends Plugin {
       settings: this.settings,
       context,
       onInsert: (files) => this.inserter.insert(files, context),
+      onSortChange: async (sort: MediaSort, direction: SortDirection) => {
+        this.settings.defaultSort = sort;
+        this.settings.defaultSortDirection = direction;
+        await this.saveData(this.settings);
+      },
       onThumbnailSizeChange: async (size: ThumbnailSize) => {
         this.settings.thumbnailSize = size;
         await this.saveData(this.settings);

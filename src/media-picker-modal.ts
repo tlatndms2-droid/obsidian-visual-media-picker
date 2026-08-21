@@ -1,5 +1,5 @@
 import { App, Modal, Notice, TFile, debounce, setIcon } from "obsidian";
-import type { MediaFilter, MediaItem, MediaSort, PickerContext, ThumbnailSize, VisualMediaPickerSettings } from "./types";
+import type { MediaFilter, MediaItem, MediaSort, PickerContext, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
 import type { MediaIndex } from "./media-index";
 import type { ThumbnailCache } from "./thumbnail-cache";
 
@@ -10,6 +10,7 @@ interface PickerDependencies {
   settings: VisualMediaPickerSettings;
   context: PickerContext;
   onInsert: (files: TFile[]) => void;
+  onSortChange: (sort: MediaSort, direction: SortDirection) => Promise<void>;
   onThumbnailSizeChange: (size: ThumbnailSize) => Promise<void>;
 }
 
@@ -21,10 +22,12 @@ export class MediaPickerModal extends Modal {
   private readonly settings: VisualMediaPickerSettings;
   private readonly context: PickerContext;
   private readonly onInsert: (files: TFile[]) => void;
+  private readonly onSortChange: (sort: MediaSort, direction: SortDirection) => Promise<void>;
   private readonly onThumbnailSizeChange: (size: ThumbnailSize) => Promise<void>;
   private query = "";
   private filter: MediaFilter = "all";
   private sort: MediaSort;
+  private sortDirection: SortDirection;
   private folder = "";
   private includeSubfolders: boolean;
   private visibleItems: MediaItem[] = [];
@@ -44,8 +47,10 @@ export class MediaPickerModal extends Modal {
     this.settings = dependencies.settings;
     this.context = dependencies.context;
     this.onInsert = dependencies.onInsert;
+    this.onSortChange = dependencies.onSortChange;
     this.onThumbnailSizeChange = dependencies.onThumbnailSizeChange;
     this.sort = dependencies.settings.defaultSort;
+    this.sortDirection = dependencies.settings.defaultSortDirection;
     this.includeSubfolders = dependencies.settings.includeSubfolders;
     if (dependencies.settings.defaultScope === "current-folder") {
       this.folder = this.getContextFolder();
@@ -97,10 +102,23 @@ export class MediaPickerModal extends Modal {
     filter.value = this.filter;
     filter.addEventListener("change", () => { this.filter = filter.value as MediaFilter; this.applyFilters(); });
 
-    const sort = toolbar.createEl("select", { cls: "dropdown vmp-select", attr: { "aria-label": "Sort media" } });
-    this.addOptions(sort, { modified: "Recently modified", created: "Recently created", name: "Name", type: "File type" });
+    const sort = toolbar.createEl("select", { cls: "dropdown vmp-select", attr: { "aria-label": "Sort by" } });
+    this.addOptions(sort, { name: "Name", modified: "Date modified", type: "Type", size: "Size", created: "Date created" });
     sort.value = this.sort;
-    sort.addEventListener("change", () => { this.sort = sort.value as MediaSort; this.applyFilters(); });
+    sort.addEventListener("change", () => {
+      this.sort = sort.value as MediaSort;
+      this.applyFilters();
+      void this.onSortChange(this.sort, this.sortDirection);
+    });
+
+    const direction = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-direction-select", attr: { "aria-label": "Sort direction" } });
+    this.addOptions(direction, { ascending: "Ascending", descending: "Descending" });
+    direction.value = this.sortDirection;
+    direction.addEventListener("change", () => {
+      this.sortDirection = direction.value as SortDirection;
+      this.applyFilters();
+      void this.onSortChange(this.sort, this.sortDirection);
+    });
 
     const size = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-size-select", attr: { "aria-label": "Thumbnail size" } });
     this.addOptions(size, { small: "Small", medium: "Medium", large: "Large" });
@@ -157,15 +175,22 @@ export class MediaPickerModal extends Modal {
       return this.includeSubfolders ? item.path.startsWith(folderPrefix) : item.parentPath === this.folder;
     }).slice();
 
-    this.visibleItems.sort((left, right) => {
-      if (this.sort === "modified") return right.mtime - left.mtime;
-      if (this.sort === "created") return right.ctime - left.ctime;
-      if (this.sort === "type") return left.extension.localeCompare(right.extension) || left.name.localeCompare(right.name);
-      return left.name.localeCompare(right.name);
-    });
+    this.visibleItems.sort((left, right) => this.compareItems(left, right));
 
     this.resultLabel?.setText(`${this.visibleItems.length.toLocaleString()} items`);
     this.grid?.setItems(this.visibleItems);
+  }
+
+  private compareItems(left: MediaItem, right: MediaItem): number {
+    const compareText = (a: string, b: string): number => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    let result: number;
+    if (this.sort === "modified") result = left.mtime - right.mtime;
+    else if (this.sort === "created") result = left.ctime - right.ctime;
+    else if (this.sort === "size") result = left.size - right.size;
+    else if (this.sort === "type") result = compareText(left.extension, right.extension) || compareText(left.name, right.name);
+    else result = compareText(left.name, right.name);
+    if (result === 0) result = compareText(left.path, right.path);
+    return this.sortDirection === "ascending" ? result : -result;
   }
 
   private createCard(item: MediaItem, index: number): HTMLElement {

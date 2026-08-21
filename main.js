@@ -65,7 +65,8 @@ var MediaIndex = class {
       path: file.path,
       parentPath: file.parent?.path ?? "",
       mtime: file.stat.mtime,
-      ctime: file.stat.ctime
+      ctime: file.stat.ctime,
+      size: file.stat.size
     };
   }
   getKind(extension) {
@@ -95,8 +96,10 @@ var MediaPickerModal = class extends import_obsidian.Modal {
     this.settings = dependencies.settings;
     this.context = dependencies.context;
     this.onInsert = dependencies.onInsert;
+    this.onSortChange = dependencies.onSortChange;
     this.onThumbnailSizeChange = dependencies.onThumbnailSizeChange;
     this.sort = dependencies.settings.defaultSort;
+    this.sortDirection = dependencies.settings.defaultSortDirection;
     this.includeSubfolders = dependencies.settings.includeSubfolders;
     if (dependencies.settings.defaultScope === "current-folder") {
       this.folder = this.getContextFolder();
@@ -146,12 +149,21 @@ var MediaPickerModal = class extends import_obsidian.Modal {
       this.filter = filter.value;
       this.applyFilters();
     });
-    const sort = toolbar.createEl("select", { cls: "dropdown vmp-select", attr: { "aria-label": "Sort media" } });
-    this.addOptions(sort, { modified: "Recently modified", created: "Recently created", name: "Name", type: "File type" });
+    const sort = toolbar.createEl("select", { cls: "dropdown vmp-select", attr: { "aria-label": "Sort by" } });
+    this.addOptions(sort, { name: "Name", modified: "Date modified", type: "Type", size: "Size", created: "Date created" });
     sort.value = this.sort;
     sort.addEventListener("change", () => {
       this.sort = sort.value;
       this.applyFilters();
+      void this.onSortChange(this.sort, this.sortDirection);
+    });
+    const direction = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-direction-select", attr: { "aria-label": "Sort direction" } });
+    this.addOptions(direction, { ascending: "Ascending", descending: "Descending" });
+    direction.value = this.sortDirection;
+    direction.addEventListener("change", () => {
+      this.sortDirection = direction.value;
+      this.applyFilters();
+      void this.onSortChange(this.sort, this.sortDirection);
     });
     const size = toolbar.createEl("select", { cls: "dropdown vmp-select vmp-size-select", attr: { "aria-label": "Thumbnail size" } });
     this.addOptions(size, { small: "Small", medium: "Medium", large: "Large" });
@@ -205,14 +217,20 @@ var MediaPickerModal = class extends import_obsidian.Modal {
       if (!this.folder) return true;
       return this.includeSubfolders ? item.path.startsWith(folderPrefix) : item.parentPath === this.folder;
     }).slice();
-    this.visibleItems.sort((left, right) => {
-      if (this.sort === "modified") return right.mtime - left.mtime;
-      if (this.sort === "created") return right.ctime - left.ctime;
-      if (this.sort === "type") return left.extension.localeCompare(right.extension) || left.name.localeCompare(right.name);
-      return left.name.localeCompare(right.name);
-    });
+    this.visibleItems.sort((left, right) => this.compareItems(left, right));
     this.resultLabel?.setText(`${this.visibleItems.length.toLocaleString()} items`);
     this.grid?.setItems(this.visibleItems);
+  }
+  compareItems(left, right) {
+    const compareText = (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" });
+    let result;
+    if (this.sort === "modified") result = left.mtime - right.mtime;
+    else if (this.sort === "created") result = left.ctime - right.ctime;
+    else if (this.sort === "size") result = left.size - right.size;
+    else if (this.sort === "type") result = compareText(left.extension, right.extension) || compareText(left.name, right.name);
+    else result = compareText(left.name, right.name);
+    if (result === 0) result = compareText(left.path, right.path);
+    return this.sortDirection === "ascending" ? result : -result;
   }
   createCard(item, index) {
     const card = document.createElement("button");
@@ -508,6 +526,7 @@ var import_obsidian3 = require("obsidian");
 var DEFAULT_SETTINGS = {
   thumbnailSize: "medium",
   defaultSort: "modified",
+  defaultSortDirection: "descending",
   videoHoverPreview: true,
   gifHoverPreview: true,
   defaultScope: "vault",
@@ -524,7 +543,8 @@ var VisualMediaPickerSettingTab = class extends import_obsidian3.PluginSettingTa
     containerEl.empty();
     containerEl.createEl("h2", { text: "Visual Media Picker" });
     new import_obsidian3.Setting(containerEl).setName("Thumbnail size").addDropdown((dropdown) => dropdown.addOptions({ small: "Small", medium: "Medium", large: "Large" }).setValue(this.plugin.settings.thumbnailSize).onChange(async (value) => this.updateSettings({ thumbnailSize: value })));
-    new import_obsidian3.Setting(containerEl).setName("Default sort").addDropdown((dropdown) => dropdown.addOptions({ modified: "Recently modified", created: "Recently created", name: "Name", type: "File type" }).setValue(this.plugin.settings.defaultSort).onChange(async (value) => this.updateSettings({ defaultSort: value })));
+    new import_obsidian3.Setting(containerEl).setName("Default sort by").addDropdown((dropdown) => dropdown.addOptions({ name: "Name", modified: "Date modified", type: "Type", size: "Size", created: "Date created" }).setValue(this.plugin.settings.defaultSort).onChange(async (value) => this.updateSettings({ defaultSort: value })));
+    new import_obsidian3.Setting(containerEl).setName("Default sort direction").addDropdown((dropdown) => dropdown.addOptions({ ascending: "Ascending", descending: "Descending" }).setValue(this.plugin.settings.defaultSortDirection).onChange(async (value) => this.updateSettings({ defaultSortDirection: value })));
     new import_obsidian3.Setting(containerEl).setName("Video hover preview").addToggle((toggle) => toggle.setValue(this.plugin.settings.videoHoverPreview).onChange(async (value) => this.updateSettings({ videoHoverPreview: value })));
     new import_obsidian3.Setting(containerEl).setName("GIF hover preview").addToggle((toggle) => toggle.setValue(this.plugin.settings.gifHoverPreview).onChange(async (value) => this.updateSettings({ gifHoverPreview: value })));
     new import_obsidian3.Setting(containerEl).setName("Default scope").addDropdown((dropdown) => dropdown.addOptions({ vault: "Entire vault", "current-folder": "Current file or Canvas folder" }).setValue(this.plugin.settings.defaultScope).onChange(async (value) => this.updateSettings({ defaultScope: value })));
@@ -762,6 +782,11 @@ var VisualMediaPickerPlugin = class extends import_obsidian4.Plugin {
       settings: this.settings,
       context,
       onInsert: (files) => this.inserter.insert(files, context),
+      onSortChange: async (sort, direction) => {
+        this.settings.defaultSort = sort;
+        this.settings.defaultSortDirection = direction;
+        await this.saveData(this.settings);
+      },
       onThumbnailSizeChange: async (size) => {
         this.settings.thumbnailSize = size;
         await this.saveData(this.settings);

@@ -48,7 +48,8 @@ export class MediaIndex {
       path: file.path,
       parentPath: file.parent?.path ?? "",
       mtime: file.stat.mtime,
-      ctime: file.stat.ctime
+      ctime: file.stat.ctime,
+      size: file.stat.size
     };
   }
 
