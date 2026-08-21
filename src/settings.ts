@@ -1,10 +1,11 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type VisualMediaPickerPlugin from "./main";
-import type { DefaultScope, MediaSort, ThumbnailSize, VisualMediaPickerSettings } from "./types";
+import type { DefaultScope, MediaSort, SortDirection, ThumbnailSize, VisualMediaPickerSettings } from "./types";
 
 export const DEFAULT_SETTINGS: VisualMediaPickerSettings = {
   thumbnailSize: "medium",
   defaultSort: "modified",
+  defaultSortDirection: "descending",
   videoHoverPreview: true,
   gifHoverPreview: true,
   defaultScope: "vault",
@@ -27,10 +28,15 @@ export class VisualMediaPickerSettingTab extends PluginSettingTab {
       .setValue(this.plugin.settings.thumbnailSize)
       .onChange(async (value) => this.updateSettings({ thumbnailSize: value as ThumbnailSize })));
 
-    new Setting(containerEl).setName("Default sort").addDropdown((dropdown) => dropdown
-      .addOptions({ modified: "Recently modified", created: "Recently created", name: "Name", type: "File type" })
+    new Setting(containerEl).setName("Default sort by").addDropdown((dropdown) => dropdown
+      .addOptions({ name: "Name", modified: "Date modified", type: "Type", size: "Size", created: "Date created" })
       .setValue(this.plugin.settings.defaultSort)
       .onChange(async (value) => this.updateSettings({ defaultSort: value as MediaSort })));
+
+    new Setting(containerEl).setName("Default sort direction").addDropdown((dropdown) => dropdown
+      .addOptions({ ascending: "Ascending", descending: "Descending" })
+      .setValue(this.plugin.settings.defaultSortDirection)
+      .onChange(async (value) => this.updateSettings({ defaultSortDirection: value as SortDirection })));
 
     new Setting(containerEl).setName("Video hover preview").addToggle((toggle) => toggle
       .setValue(this.plugin.settings.videoHoverPreview)
